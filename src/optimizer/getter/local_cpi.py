@@ -3,68 +3,29 @@
     get_cpi()
 """
 
-from collections import OrderedDict
 
-import numpy as np
 import pandas as pd
 
-from optimizer import download
-from optimizer.settings import DATE, CPI
-from optimizer.storage import LocalFile
+from optimizer.download.cpi import get_monthly_cpi
+from optimizer.storage import LocalFrame, DataProvider
 
-CPI_FOLDER = 'macro'
-CPI_FILE = 'cpi.csv'
-UPDATE_PERIOD_IN_DAYS = 1
+CPI_FILE = LocalFrame('macro', 'cpi.csv')
+CPI_SOURCE = DataProvider(CPI_FILE,  get_monthly_cpi)
 
 
-def need_update(file: LocalFile):
-    """Обновление нужно, если прошло установленное число дней с момента обновления."""
-    if file.updated_days_ago() > UPDATE_PERIOD_IN_DAYS:
-        return True
-    return False
+from io import StringIO
+
+z = pd.DataFrame(get_monthly_cpi())
+txt = z.to_csv()
+f = StringIO(txt)
+df = pd.read_csv(f, converters={0:pd.to_datetime}, index_col=0)
+print(df.head())
+
+CPI_FILE.save(z)
+df2 = CPI_FILE.read_dataframe()
 
 
-def validate(df_old, df_updated):
-    """Проверяет совпадение данных для дат, присутствующих в старом фрейме."""
-    if not np.allclose(df_old, df_updated[df_old.index]):
-        raise ValueError('Новые данные CPI не совпадают с локальной версией.')
+print(CPI_SOURCE.get().head()) 
+        
+        
 
-
-def update_cpi(file: LocalFile):
-    """Обновляет файл с данными, проверяя совпадение со старыми."""
-    df = file.read()
-    if need_update(file):
-        df_updated = download.cpi()
-        validate(df, df_updated)
-        df = df_updated
-        file.save(df)
-
-
-def create_cpi(file: LocalFile):
-    """Создает с нуля файл с данными."""
-    df = download.cpi()
-    file.save(df)
-
-
-def get_cpi():
-    """
-    Сохраняет, обновляет и загружает локальную версию данных по CPI.
-
-    Returns
-    -------
-    pd.Series
-        В строках значения инфляции для каждого месяца.
-        Инфляция 1,2% за месяц соответствует 1.012.
-    """
-    converters = OrderedDict([(DATE, pd.to_datetime),
-                              (CPI, pd.to_numeric)])
-    data_file = LocalFile(CPI_FOLDER, CPI_FILE, converters)
-    if data_file.exists():
-        update_cpi(data_file)
-    else:
-        create_cpi(data_file)
-    return data_file.read()
-
-
-if __name__ == '__main__':
-    print(get_cpi())
