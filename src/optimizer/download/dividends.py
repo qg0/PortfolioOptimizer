@@ -11,7 +11,8 @@ import urllib.request
 import pandas as pd
 from bs4 import BeautifulSoup
 
-from optimizer.settings import DATE, DIVIDENDS
+from optimizer.storage import DataProvider
+
 
 # Номер таблицы с дивидендами в документе
 TABLE_INDEX = 2
@@ -84,13 +85,13 @@ def parse_table_rows(table):
 def make_df(parsed_rows):
     """Формирует DataFrame и упорядочивает даты по возрастанию."""
     df = pd.DataFrame(data=parsed_rows,
-                      columns=[DATE, DIVIDENDS])
-    return df.set_index(DATE)[DIVIDENDS].sort_index()
+                      columns=['DATE', 'DIVIDENDS'])
+    return df.set_index('DATE').sort_index()
 
 
-def get_dividends(ticker: str) -> pd.Series:
+def get_dividends(ticker: str) -> pd.DataFrame:
     """
-    Возвращает Series с дивидендами упорядоченными по возрастанию даты закрытия реестра.
+    Возвращает DataFrame с дивидендами упорядоченными по возрастанию даты закрытия реестра.
 
     Parameters
     ----------
@@ -99,7 +100,7 @@ def get_dividends(ticker: str) -> pd.Series:
 
     Returns
     -------
-    pandas.Series
+    pd.DataFrame
         Строки - даты закрытия реестра упорядоченные по возрастанию.
         Значения - дивиденды.
     """
@@ -110,5 +111,22 @@ def get_dividends(ticker: str) -> pd.Series:
     return make_df(parsed_rows)
 
 
+def div_provider(ticker: str):
+    def _download_all():
+        return get_dividends(ticker)
+    return DataProvider(get_dividends, _download_all, ticker, 'dividends')
+
+def get_div(ticker):
+    provider = div_provider(ticker)
+    return provider.get_local_dataframe()
+
+def update_div(ticker):
+    provider = div_provider(ticker)
+    provider.create()
+
 if __name__ == '__main__':
-    print(get_dividends('CHMF'))
+    print(get_div('CHMF'))
+    # Может надо разделять за какой период дивиденды?
+    #https://www.severstal.com/rus/ir/shareholder_information/dividends/
+    #2017-06-20      24.44
+    #2017-06-20      27.73

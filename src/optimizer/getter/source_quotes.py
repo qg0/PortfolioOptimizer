@@ -19,10 +19,27 @@ from os import path
 import arrow
 import pandas as pd
 
-from optimizer import download
-from optimizer.getter import local_securities_info
-from optimizer.getter.local_dividends import LocalDividends
-from optimizer.settings import DATE, CLOSE_PRICE, VOLUME
+from optimizer.download.history import get_quotes_history
+
+
+#TODO: отдельно добавляем aliases
+ 
+#def _yield_aliases_quotes_history(self):
+#    """Генерирует истории котировок для все тикеров аналогов заданного тикера."""
+#    aliases_series = local_securities_info.get_aliases_tickers([self.ticker])
+#    aliases = aliases_series.loc[self.ticker].split(sep=' ')
+#    for ticker in aliases:
+#        yield download.quotes_history(ticker)
+#
+#def create_local_history(self):
+#    """Формирует, сохраняет локальную версию и возвращает склеенную из всех тикеров аналогов историю котировок."""
+#    aliases = self._yield_aliases_quotes_history()
+#    df = pd.concat(aliases)
+#    # Для каждой даты выбирается тикер с максимальным оборотом
+#    df = df.loc[df.groupby(DATE)[VOLUME].idxmax()]
+#    self.df = df.sort_index()
+#    self._save_history()
+
 
 MARKET_TIME_ZONE = 'Europe/Moscow'
 # Реально торги заканчиваются в 19.00, но данные транслируются с задержкой в 15 минут
@@ -46,13 +63,6 @@ class LocalQuotes(LocalDividends):
     _load_converter = {DATE: pd.to_datetime, CLOSE_PRICE: pd.to_numeric, VOLUME: pd.to_numeric}
     _data_columns = [CLOSE_PRICE, VOLUME]
 
-    def need_update(self):
-        """Проверяет по дате изменения файла и времени окончания торгов, нужно ли обновлять локальные данные."""
-        file_date = arrow.get(path.getmtime(self.local_data_path)).to(MARKET_TIME_ZONE)
-        # Если файл обновлялся после завершения последнего торгового дня, то он не должен обновляться
-        if file_date > end_of_last_trading_day():
-            return False
-        return True
 
     @property
     def df_last_date(self):
@@ -79,21 +89,7 @@ class LocalQuotes(LocalDividends):
             self.df = pd.concat([self.df, df_update.iloc[1:]])
             self._save_history()
 
-    def _yield_aliases_quotes_history(self):
-        """Генерирует истории котировок для все тикеров аналогов заданного тикера."""
-        aliases_series = local_securities_info.get_aliases_tickers([self.ticker])
-        aliases = aliases_series.loc[self.ticker].split(sep=' ')
-        for ticker in aliases:
-            yield download.quotes_history(ticker)
 
-    def create_local_history(self):
-        """Формирует, сохраняет локальную версию и возвращает склеенную из всех тикеров аналогов историю котировок."""
-        aliases = self._yield_aliases_quotes_history()
-        df = pd.concat(aliases)
-        # Для каждой даты выбирается тикер с максимальным оборотом
-        df = df.loc[df.groupby(DATE)[VOLUME].idxmax()]
-        self.df = df.sort_index()
-        self._save_history()
 
 
 def get_quotes_history(ticker: str):

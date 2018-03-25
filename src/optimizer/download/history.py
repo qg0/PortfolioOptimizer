@@ -14,7 +14,7 @@ import datetime
 import pandas as pd
 import requests
 
-from optimizer.settings import DATE, CLOSE_PRICE, VOLUME
+from optimizer.storage import DataProvider
 
 
 def get_json(url: str):
@@ -57,8 +57,7 @@ def make_url(base: str, ticker: str, start_date=None, block_position=0):
     arg_str = '&'.join(query_args)
     return f'{url}?{arg_str}'
 
-
-class Quotes:
+class Quote:
     """
     Представление ответа сервера по отдельному тикеру.
     """
@@ -67,35 +66,20 @@ class Quotes:
     def __init__(self, ticker, start_date):
         self.ticker, self.start_date = ticker, start_date
         self.block_position = 0
-        self.data = None
         self.load()
+        
+    def load(self):    
+        self.data = get_json(self.url)
+        if self.block_position == 0 and len(self) == 0:
+            raise ValueError(f'Пустой ответ по запросу {self.url}')
 
     @property
     def url(self):
         """Формирует url для запроса данных с MOEX ISS."""
-        return make_url(self.base, self.ticker,
-                        self.start_date, self.block_position)
-
-    def load(self):
-        """Загружает и проверяет json с данными."""
-        self.data = get_json(self.url)
-        self._validate()
-
-    def _validate(self):
-        if self.block_position == 0 and len(self) == 0:
-            raise ValueError(f'Пустой ответ. Проверьте запрос: {self.url}')
-
-    def __len__(self):
-        return len(self.values)
-
-    def __bool__(self):
-        return self.__len__() > 0
-
-    #  В ответе сервера есть словарь:
-    #   - по ключу history - словарь с историей котировок
-    #   - во вложеном словаре есть ключи columns и data с масивами описания
-    #     колонок и данными.
-
+        return make_url(self.base, 
+                        self.ticker,
+                        self.start_date, 
+                        self.block_position)
     @property
     def values(self):
         """Извлекает данные и json."""
@@ -107,40 +91,38 @@ class Quotes:
         return self.data['history']['columns']
 
     @property
-    def df(self):
+    def raw_df(self):
         """Raw dataframe from *self.data['history']*"""
         return pd.DataFrame(data=self.values, columns=self.columns)
 
-    # WONTFIX: для итератора необходимы два метода: __iter__() и __next__()
-    #          возможно, переход к следующему элементу может быть по-другому
-    #          распределен между этими методами
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        # если блок непустой
-        if self:
-            # используем текущий результат парсинга
-            current_dataframe = self.dataframe
-            # перещелкиваем сдаиг на следующий блок и получаем новые данные
-            self.block_position += len(self)
-            self.load()
-            # выводим текущий результат парсинга
-            return current_dataframe
-        else:
-            raise StopIteration
-
+    @property
+    def renamed_df(self):
+        mapper = {'TRADEDATE': 'DATE', 'CLOSE': 'CLOSE_PRICE'}
+        df = self.raw_df.rename(index=str, columns=mapper)
+        return df[['DATE', 'CLOSE_PRICE', 'VOLUME']]
+    
     @property
     def dataframe(self):
-        """Выбирает из сырого DataFrame только с необходимые колонки - даты, цены закрытия и объемы."""
-        df = self.df
-        df[DATE] = pd.to_datetime(df['TRADEDATE'])
-        df[CLOSE_PRICE] = pd.to_numeric(df['CLOSE'])
-        df[VOLUME] = pd.to_numeric(df['VOLUME'])
-        return df[[DATE, CLOSE_PRICE, VOLUME]]
+        """Выбирает из сырого DataFrame только необходимые колонки 
+           - даты и цены закрытия."""
+        df = self.renamed_df
+        df['DATE'] = pd.to_datetime(df['DATE'])
+        return df.set_index('DATE')
+
+    def __len__(self):
+        return len(self.values)
+
+    def __bool__(self):
+        return self.__len__() > 0
+    
+    def iterate(self):
+        while self:
+            yield self.renamed_df
+            self.block_position += len(self)
+            self.load() 
 
 
-class Index(Quotes):
+class Index(Quote):
     """
     Представление ответа сервера - данные по индексу полной доходности MOEX.
 
@@ -152,14 +134,12 @@ class Index(Quotes):
         super().__init__(self.ticker, start_date)
 
     @property
-    def dataframe(self):
-        """Выбирает из сырого DataFrame только с необходимые колонки - даты и цены закрытия."""
-        df = self.df
-        df[DATE] = pd.to_datetime(df['TRADEDATE'])
-        df[CLOSE_PRICE] = pd.to_numeric(df['CLOSE'])
-        return df[[DATE, CLOSE_PRICE]].set_index(DATE)
+    def renamed_df(self):
+        mapper = {'TRADEDATE': 'DATE', 'CLOSE': 'CLOSE_PRICE'}
+        df = self.raw_df.rename(index=str, columns=mapper)
+        return df.set_index('DATE')[['CLOSE_PRICE']]
 
-
+    
 def get_index_history(start_date=None):
     """
     Возвращает котировки индекса полной доходности с учетом российских налогов
@@ -176,7 +156,8 @@ def get_index_history(start_date=None):
         В строках даты торгов.
         В столбцах цена закрытия индекса полной доходности.
     """
-    return pd.concat(Index(start_date))[CLOSE_PRICE]
+    gen = Index(start_date).iterate()
+    return pd.concat(gen)
 
 
 def get_quotes_history(ticker, start_date=None):
@@ -197,15 +178,39 @@ def get_quotes_history(ticker, start_date=None):
         В строках даты торгов.
         В столбцах [CLOSE, VOLUME] цена закрытия и оборот в штуках.
     """
-    gen = Quotes(ticker, start_date)
+    gen = Quote(ticker, start_date).iterate()
     df = pd.concat(gen, ignore_index=True)
     # Для каждой даты выбирается режим торгов с максимальным оборотом
-    df = df.loc[df.groupby(DATE)[VOLUME].idxmax()]
-    df = df.set_index(DATE).sort_index()
-    return df
+    ix = df.groupby('DATE')['VOLUME'].idxmax()
+    df = df.iloc[ix]
+    return df.set_index('DATE').sort_index()
+        
+        
+def make_quote_provider(ticker):
+    def _download_all():
+        return get_quotes_history(ticker, None)
+    return DataProvider(get_quotes_history, _download_all, ticker, 'quotes')
+
+
+def make_index_provider():
+    def _download_all():
+        return get_index_history(None)    
+    return DataProvider(get_index_history, _download_all, 'MCFTRR', 'index')
+
+
+def get_quote(ticker):
+    if ticker == 'MCFTRR' or ticker.lower() == 'index':
+        provider = make_index_provider()
+    else:
+        provider = make_quote_provider(ticker)
+    return provider.get_local_dataframe()
 
 
 if __name__ == '__main__':
-    z = get_index_history(start_date=datetime.date(2017, 10, 2))
-    print(z.head())
-    print(z.tail())
+    dt = datetime.date(2017, 10, 2)
+    i = Quote('GAZP', dt)
+    df = i.dataframe.head()
+    print(df)
+    
+    df_sber = get_quote('GAZP')
+    print(df_sber.head())
