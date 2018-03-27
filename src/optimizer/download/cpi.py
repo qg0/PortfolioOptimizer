@@ -47,9 +47,11 @@ def parse_xls(url=URL_CPI, excel_reading_parameters=PARSING_PARAMETERS):
 def cpi_provider():
     return DataProvider(parse_xls, parse_xls, 'CPI', 'macro')
 
+
 def get_cpi():
     provider = cpi_provider()
     return provider.get_local_dataframe()
+
 
 def update_cpi():
     provider = cpi_provider()
